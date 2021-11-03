@@ -9,9 +9,38 @@ import ArgumentParser  // Available from Apple: https://github.com/apple/swift-a
 import Foundation
 import os
 import RealityKit
+import Metal
 
 private let logger = Logger(subsystem: "com.apple.sample.photogrammetry",
                             category: "HelloPhotogrammetry")
+
+/// Checks to make sure at least one GPU meets the minimum requirements for object reconstruction. At
+/// least one GPU must be a "high power" device, which means it has at least 4 GB of RAM, provides
+/// barycentric coordinates to the fragment shader, and is running on an Apple silicon Mac or an Intel Mac
+/// with a discrete GPU.
+private func supportsObjectReconstruction() -> Bool {
+    for device in MTLCopyAllDevices() where
+        !device.isLowPower &&
+         device.areBarycentricCoordsSupported &&
+         device.recommendedMaxWorkingSetSize >= UInt64(4e9) {
+        return true
+    }
+    return false
+}
+
+/// Returns `true` if at least one GPU has hardware support for ray tracing. The GPU that supports ray
+/// tracing need not be the same GPU that supports object reconstruction.
+private func supportsRayTracing() -> Bool {
+    for device in MTLCopyAllDevices() where device.supportsRaytracing {
+        return true
+    }
+    return false
+}
+
+/// Returns `true` if the current hardware supports Object Capture.
+func supportsObjectCapture() -> Bool {
+    return supportsObjectReconstruction() && supportsRayTracing()
+}
 
 /// Implements the main command structure, defines the command-line arguments,
 /// and specifies the main run loop.
@@ -49,6 +78,12 @@ struct HelloPhotogrammetry: ParsableCommand {
     
     /// The main run loop entered at the end of the file.
     func run() {
+        guard supportsObjectCapture() else {
+            logger.error("Program terminated early because the hardware doesn't support Object Capture.")
+            print("Object Capture is not available on this computer.")
+            Foundation.exit(1)
+        }
+        
         let inputFolderUrl = URL(fileURLWithPath: inputFolder, isDirectory: true)
         let configuration = makeConfigurationFromArguments()
         logger.log("Using configuration: \(String(describing: configuration))")
@@ -67,7 +102,7 @@ struct HelloPhotogrammetry: ParsableCommand {
             Foundation.exit(1)
         }
         
-        let waiter = Task() {
+        let waiter = Task {
             do {
                 for try await output in session.outputs {
                     switch output {
